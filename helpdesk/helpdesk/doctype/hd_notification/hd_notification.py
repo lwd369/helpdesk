@@ -50,10 +50,15 @@ class HDNotification(Document):
 
     def after_insert(self):
         if self.notification_type == "Mention":
-            frappe.sendmail(
-                recipients=self.user_to,
-                subject="New notification",
-                message=self.format_message(),
-                template="notification",
-                args=self.get_args(),
-            )
+            # 创建 Notification Log 记录
+            frappe.get_doc(
+                {
+                    "doctype": "Notification Log",
+                    "subject": self.format_message(),
+                    "for_user": self.user_to,
+                    "type": "Mention",
+                    "document_type": "HD Ticket",
+                    "document_name": self.reference_ticket,
+                    "from_user": self.user_from,
+                }
+            ).insert(ignore_permissions=True)
