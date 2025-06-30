@@ -14,7 +14,7 @@
         :key="field.fieldname"
         class="form-control"
         :placeholder="`Add ${field.label}`"
-        :value="transValue"
+        :model-value="transValue"
         autocomplete="off"
         v-on="
           textFields.includes(field.fieldtype)
@@ -24,7 +24,7 @@
                 },
               }
             : {
-                change: (event) => {
+                'update:model-value': (event) => {
                   emitUpdate(
                     field.fieldname,
                     event?.value || event?.target?.value || event
@@ -38,10 +38,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h } from "vue";
 import { Autocomplete, Link } from "@/components";
-import { createResource, FormControl, Tooltip } from "frappe-ui";
 import { Field, FieldValue } from "@/types";
+import { createResource, FormControl, Tooltip } from "frappe-ui";
+import { computed, h } from "vue";
 
 interface P {
   field: Field;
@@ -60,7 +60,7 @@ interface E {
 const props = defineProps<P>();
 const emit = defineEmits<E>();
 
-const textFields = ["Long Text", "Small Text", "Text", "Text Editor"];
+const textFields = ["Long Text", "Small Text", "Text", "Text Editor", "Data"];
 
 const component = computed(() => {
   if (props.field.url_method) {
