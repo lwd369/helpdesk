@@ -100,10 +100,11 @@
       />
     </div>
     <AssignmentModal
-      v-if="ticket.data"
+      v-if="ticket.data && showAssignmentModal"
       v-model="showAssignmentModal"
       :assignees="ticket.data.assignees"
       :docname="ticketId"
+      :team="ticket.data?.agent_group"
       doctype="HD Ticket"
       @update="
         () => {
@@ -321,6 +322,7 @@ const activities = computed(() => {
       creation: email.communication_date || email.creation,
       attachments: email.attachments,
       name: email.name,
+      deliveryStatus: email.delivery_status,
       isFirstEmail: idx === 0,
     };
   });

@@ -22,15 +22,25 @@ class HDServiceLevelAgreement(Document):
     doctype_ticket = "HD Ticket"
 
     def validate(self):
-        self.validate_priorities()  # To refactor
-        self.validate_support_and_resolution()  # To refactor
+        self.validate_default_sla()
+        self.validate_priorities()
+        self.validate_support_and_resolution()
         self.validate_condition()  # Looks okay but check again
 
     def validate_priorities(self):
-        priorities = []
+        self.validate_priority_defaults()
+        self.validate_response_and_resolution_time()
+        self.validate_unique_priorities()
+        self.validate_all_priorities()
 
+    # check if we have more than one default priority
+    def validate_priority_defaults(self):
+        if sum(d.default_priority for d in self.priorities) > 1:
+            frappe.throw(_("You cannot set more than one Default Priority."))
+
+    # Check if response and resolution time is set for every priority
+    def validate_response_and_resolution_time(self):
         for priority in self.priorities:
-            # Check if response and resolution time is set for every priority
             if not priority.response_time:
                 frappe.throw(
                     _("Set Response Time for Priority {0} in row {1}.").format(
@@ -41,7 +51,7 @@ class HDServiceLevelAgreement(Document):
             if self.apply_sla_for_resolution:
                 if not priority.resolution_time:
                     frappe.throw(
-                        _("Set Response Time for Priority {0} in row {1}.").format(
+                        _("Set Resolution Time for Priority {0} in row {1}.").format(
                             priority.priority, priority.idx
                         )
                     )
@@ -56,44 +66,73 @@ class HDServiceLevelAgreement(Document):
                         ).format(priority.priority, priority.idx)
                     )
 
-            priorities.append(priority.priority)
-
-        # Check if repeated priority
-        # flake8: noqa
-        if not len(set(priorities)) == len(priorities):
+    def validate_unique_priorities(self):
+        priorities = [d.priority for d in self.priorities]
+        if len(priorities) != len(set(priorities)):
             repeated_priority = get_repeated(priorities)
             frappe.throw(_("Priority {0} has been repeated.").format(repeated_priority))
 
-        # set default priority from priorities
-        try:
-            self.default_priority = next(
-                d.priority for d in self.priorities if d.default_priority
-            )
-        except Exception:
-            frappe.throw(_("Select a Default Priority."))
+    def validate_all_priorities(self):
+        all_priorities = frappe.get_all("HD Ticket Priority", pluck="name")
+        sla_priorities = [p.priority for p in self.priorities]
+
+        for priority in all_priorities:
+            if priority not in sla_priorities:
+                frappe.msgprint(
+                    _("Priority <u>{0}</u> must be included in the SLA {1}.").format(
+                        priority, self.name
+                    )
+                )
 
     def validate_support_and_resolution(self):
         week = get_weekdays()
         support_days = []
 
         for support_and_resolution in self.support_and_resolution:
-            support_days.append(support_and_resolution.workday)
-            support_and_resolution.idx = week.index(support_and_resolution.workday) + 1
 
             if to_timedelta(support_and_resolution.start_time) >= to_timedelta(
                 support_and_resolution.end_time
             ):
                 frappe.throw(
                     _(
-                        "Start Time can't be greater than or equal to End Time for {0}."
-                    ).format(support_and_resolution.workday)
+                        "Start Time can't be greater than or equal to End Time in row <u>{0}</u>."
+                    ).format(support_and_resolution.idx)
                 )
+
+            support_days.append(support_and_resolution.workday)
 
         # Check for repeated workday
         # flake8: noqa
         if not len(set(support_days)) == len(support_days):
             repeated_days = get_repeated(support_days)
             frappe.throw(_("Workday {0} has been repeated.").format(repeated_days))
+
+    def validate_default_sla(self):
+        default_sla_exists = frappe.db.exists(
+            self.doctype,
+            {
+                "default_sla": True,
+                "name": ["!=", self.name],
+            },
+        )
+
+        if default_sla_exists and self.default_sla:
+            frappe.db.set_value(self.doctype, default_sla_exists, "default_sla", False)
+            frappe.msgprint(
+                _(
+                    "Setting <strong>{0}</strong> as the default SLA removes <strong>{1}</strong> as the default SLA. You’ll need to add a condition in <strong>{1}</strong> for the SLA to work."
+                ).format(self.name, default_sla_exists)
+            )
+
+        if not self.default_sla and not default_sla_exists:
+            frappe.throw(
+                _(
+                    "You must set one SLA as Default. Please check the Default SLA option."
+                )
+            )
+
+        if self.has_value_changed("enabled") and not self.enabled and self.default_sla:
+            frappe.throw(_("You cannot disable the default SLA."))
 
     def validate_condition(self):
         if not self.condition:
@@ -106,25 +145,21 @@ class HDServiceLevelAgreement(Document):
                 _("The Condition '{0}' is invalid: {1}").format(self.condition, str(e))
             )
 
-    # What?
-    def get_hd_service_level_agreement_priority(self, priority):
-        priority = frappe.get_doc(
-            "HD Service Level Priority", {"priority": priority, "parent": self.name}
-        )
-
-        return frappe._dict(
-            {
-                "priority": priority.priority,
-                "response_time": priority.response_time,
-                "resolution_time": priority.resolution_time,
-            }
-        )
+    def before_save(self):
+        # set default priority
+        try:
+            self.default_priority = next(
+                d.priority for d in self.priorities if d.default_priority
+            )
+        except Exception:
+            frappe.throw(_("Select a Default Priority."))
 
     def apply(self, doc: Document):
         self.handle_new(doc)
-        self.handle_status(doc)
+        self.handle_doc_status(doc)
         self.handle_targets(doc)
         self.handle_agreement_status(doc)
+        self.validate_all_priorities()
 
     def handle_new(self, doc: Document):
         if not doc.is_new():
@@ -133,7 +168,7 @@ class HDServiceLevelAgreement(Document):
         doc.service_level_agreement_creation = creation
         doc.priority = doc.priority or self.default_priority
 
-    def handle_status(self, doc: Document):
+    def handle_doc_status(self, doc: Document):
         if doc.is_new() or not doc.has_value_changed("status"):
             return
         self.set_first_response_time(doc)
@@ -183,6 +218,7 @@ class HDServiceLevelAgreement(Document):
             return
         doc.on_hold_since = None
         curr_val = time_diff_in_seconds(now_datetime(), paused_since)
+        curr_val = max(curr_val, 0)  # Ensure non-negative hold time
         doc.total_hold_time = (doc.total_hold_time or 0) + curr_val
 
     def handle_targets(self, doc: Document):
@@ -191,7 +227,9 @@ class HDServiceLevelAgreement(Document):
 
     def set_response_by(self, doc: Document):
         start = doc.service_level_agreement_creation
-        doc.response_by = self.calc_time(start, doc.priority, "response_time")
+        doc.response_by = self.calc_time(
+            doc.service_level_agreement_creation, doc.priority, "response_time"
+        )
 
     def set_resolution_by(self, doc: Document):
         total_hold_time = doc.total_hold_time or 0
@@ -200,7 +238,12 @@ class HDServiceLevelAgreement(Document):
             seconds=total_hold_time,
             as_datetime=True,
         )
-        doc.resolution_by = self.calc_time(start, doc.priority, "resolution_time")
+        doc.resolution_by = self.calc_time(
+            doc.service_level_agreement_creation,
+            doc.priority,
+            "resolution_time",
+            hold_time=total_hold_time,
+        )
 
     def reset_resolution_metrics(self, doc: Document):
         pause_on = [row.status for row in self.pause_sla_on]
@@ -248,36 +291,78 @@ class HDServiceLevelAgreement(Document):
         start_at: str,
         priority: str,
         target: Literal["response_time", "resolution_time"],
+        hold_time: float = 0,
     ):
-        res = get_datetime(start_at)
-        priority = self.get_priorities()[priority]
-        time_needed = priority.get(target, 0)
-        holidays = self.get_holidays()
-        weekdays = get_weekdays()
-        workdays = self.get_workdays()
-        while time_needed:
-            today = res
-            today_day = getdate(today)
-            today_weekday = weekdays[today.weekday()]
-            is_workday = today_weekday in workdays
-            is_holiday = today_day in holidays
-            if is_holiday or not is_workday:
-                res = add_to_date(res, days=1, as_datetime=True)
+        """
+        Considerations:
+            - Holidays
+            - Workdays
+            - Working hours
+            - Hold time if target is resolution time (in seconds)
+
+        Returns:
+            - DateTime when the target is expected to be met
+        """
+        result = get_datetime(start_at)
+        priorities = self.get_priorities()
+        if priority not in priorities:
+            frappe.throw(
+                _("Please add {0} priority in {1} SLA").format(priority, self.name)
+            )
+        priority = priorities[priority]
+        remaining_target_time = priority.get(
+            target, 0
+        )  # time for response or resolution in seconds
+        holidays = (
+            self.get_holidays()
+        )  # From Holiday List, returns a list of holiday dates
+        days_list = get_weekdays()  # list of weekdays, ["Monday", "Tuesday", ...]
+        working_days = (
+            self.get_workdays()
+        )  # From Working hours table, returns a dict with weekday names as keys and workday objects as values
+
+        if target == "resolution_time":
+            # add hold time to remaining target time
+            remaining_target_time += hold_time
+
+        while remaining_target_time:
+            current_datetime = result
+            current_date = getdate(current_datetime)
+            current_day = days_list[
+                current_datetime.weekday()
+            ]  # Returns the current weekday name like Monday or Tuesday etc.
+
+            is_current_day_working = current_day in working_days
+            is_holiday = current_date in holidays
+
+            if is_holiday or not is_current_day_working:
+                next_date = getdate(add_to_date(result, days=1, as_datetime=True))
+                result = next_date
                 continue
-            today_workday = workdays[today_weekday]
-            now_in_seconds = time_diff_in_seconds(today, today_day)
-            start_time = max(today_workday.start_time.total_seconds(), now_in_seconds)
-            till_start_time = max(start_time - now_in_seconds, 0)
-            end_time = max(today_workday.end_time.total_seconds(), now_in_seconds)
+
+            current_workday_doc = working_days[
+                current_day
+            ]  # Get the workday object for the current day
+            current_time_in_seconds = time_diff_in_seconds(
+                current_datetime, current_date
+            )
+            start_time = max(
+                current_workday_doc.start_time.total_seconds(), current_time_in_seconds
+            )
+            till_start_time = max(start_time - current_time_in_seconds, 0)
+            end_time = max(
+                current_workday_doc.end_time.total_seconds(), current_time_in_seconds
+            )
             time_left = max(end_time - start_time, 0)
             if not time_left:
-                res = getdate(add_to_date(res, days=1, as_datetime=True))
+                next_date = getdate(add_to_date(result, days=1, as_datetime=True))
+                result = next_date
                 continue
-            time_taken = min(time_needed, time_left)
-            time_needed -= time_taken
+            time_taken = min(remaining_target_time, time_left)
+            remaining_target_time -= time_taken
             time_required = till_start_time + time_taken
-            res = add_to_date(res, seconds=time_required, as_datetime=True)
-        return res
+            result = add_to_date(result, seconds=time_required, as_datetime=True)
+        return result
 
     def get_working_days(self) -> dict[str, dict]:
         workdays = []
@@ -359,32 +444,27 @@ class HDServiceLevelAgreement(Document):
             res[row.workday] = row
         return res
 
-    # temporary, will remove once sla goes to frontend
-    def before_insert(self):
-        user = frappe.session.user
-        user_onboarding_status = frappe.get_value("User", user, "onboarding_status")
-        if not user_onboarding_status:
-            return
+    def on_trash(self):
+        self.handle_default_sla_deletion()
 
-        user_onboarding_status = frappe.parse_json(user_onboarding_status)
-        if not user_onboarding_status:
+    def handle_default_sla_deletion(self):
+        if not self.default_sla:
             return
-        hd_onboarding_steps = user_onboarding_status.get("helpdesk_onboarding_status")
-        if not hd_onboarding_steps:
+        default_sla_exists = frappe.db.exists(
+            self.doctype,
+            {
+                "default_sla": True,
+                "name": ["!=", self.name],
+            },
+        )
+        if default_sla_exists:
             return
-
-        sla_onboarding_status = {}
-        for step in hd_onboarding_steps:
-            if step.get("name") == "setup_sla":
-                sla_onboarding_status = step
-                break
-
-        if not sla_onboarding_status:
-            return
-        if sla_onboarding_status.get("completed"):
-            return
-
-        frappe.publish_realtime("update_sla_status", user=frappe.session.user)
+        else:
+            frappe.throw(
+                _(
+                    "Cannot delete the default SLA. At least one SLA must be marked as default."
+                )
+            )
 
 
 def get_repeated(values):

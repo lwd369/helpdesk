@@ -24,7 +24,7 @@
     </LayoutHeader>
     <div class="flex overflow-hidden h-full w-full">
       <!-- Main Ticket Comm -->
-      <section class="flex flex-col flex-1 max-w-[calc(100%-382px)]">
+      <section class="flex flex-col flex-1 w-full md:max-w-[calc(100%-382px)]">
         <!-- show for only mobile -->
         <TicketCustomerTemplateFields v-if="isMobileView" />
 
@@ -43,6 +43,7 @@
             placeholder="Type a message"
             autofocus
             @clear="() => (isExpanded = false)"
+            :uploadFunction="(file:any)=>uploadFunction(file, 'HD Ticket', props.ticketId)"
           >
             <template #bottom-right>
               <Button
@@ -72,15 +73,15 @@ import { useScreenSize } from "@/composables/screen";
 import { socket } from "@/socket";
 import { useConfigStore } from "@/stores/config";
 import { globalStore } from "@/stores/globalStore";
-import { isContentEmpty } from "@/utils";
+import { isContentEmpty, uploadFunction } from "@/utils";
 import { Icon } from "@iconify/vue";
 import { Breadcrumbs, Button, call, createResource, toast } from "frappe-ui";
 import { computed, onMounted, onUnmounted, provide, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useTicket } from "./data";
 import { ITicket } from "./symbols";
-import TicketConversation from "./TicketConversation.vue";
 import TicketCustomerTemplateFields from "./TicketCustomerTemplateFields.vue";
+import TicketConversation from "./TicketConversation.vue";
 import TicketFeedback from "./TicketFeedback.vue";
 import TicketTextEditor from "./TicketTextEditor.vue";
 
